@@ -15,7 +15,7 @@ const Voice = () => {
 
     useEffect(() => {
 
-        socketRef.current = io('http://localhost:5000')
+        socketRef.current = io('https://mobishaala-chatbot.onrender.com')
 
         socketRef.current.on('voiceReceiveMessage', (data) => {
             // console.log(data)

@@ -132,7 +132,7 @@ const Voice = () => {
                 )
             }
         </div>
-        <div>
+        <div className='flex justify-center items-center gap-8'>
             <button onMouseDown={handleMicOnClick} onMouseUp={handleMicOnRelease} className={isListening ? 'bg-slate-200 rounded-full p-2' : 'bg-slate-400 rounded-full p-2'}>
                 <FaMicrophone className='text-xl'/>
             </button>

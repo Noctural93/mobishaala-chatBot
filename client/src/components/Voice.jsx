@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import io from 'socket.io-client'
-import { TiMicrophone } from "react-icons/ti";
+import { FaMicrophone } from "react-icons/fa6"
 
 
 const Voice = () => {
@@ -133,7 +133,7 @@ const Voice = () => {
         </div>
         <div>
             <button onMouseDown={handleMicOnClick} onMouseUp={handleMicOnRelease} className={isListening ? 'bg-slate-200 rounded-full p-2' : 'bg-slate-400 rounded-full p-2'}>
-                <TiMicrophone className='text-xl'/>
+                <FaMicrophone className='text-xl'/>
             </button>
         </div>
     </div>

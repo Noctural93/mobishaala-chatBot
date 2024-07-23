@@ -135,6 +135,9 @@ const Voice = () => {
             <button onMouseDown={handleMicOnClick} onMouseUp={handleMicOnRelease} className={isListening ? 'bg-slate-200 rounded-full p-2' : 'bg-slate-400 rounded-full p-2'}>
                 <FaMicrophone className='text-xl'/>
             </button>
+            <Link to='/chat' className='text-lg font-semibold'>
+                Chat
+            </Link>
         </div>
     </div>
   )

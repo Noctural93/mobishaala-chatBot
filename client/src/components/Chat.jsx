@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import SpeechToText from './SpeechToText'
 import io from 'socket.io-client'
+import { Link } from 'react-router-dom'
 
 const Chat = () => {
 
@@ -95,6 +96,9 @@ const Chat = () => {
                 <button type='submit' className='h-[45%] w-[10%] bg-slate-400 font-sans text-lg font-semibold'>send</button>
             </form>
         </div>
+        <Link to='/voice' className='text-lg font-semibold'>
+            voice
+        </Link>
       </div>
     </div>
   )

@@ -63,6 +63,7 @@ const Voice = () => {
         setIsTyping(true)
         setBotChat('')
 
+        speak(text)
         let index = 0;
 
         const intervalId = setInterval(() => {
@@ -71,7 +72,6 @@ const Voice = () => {
 
             if(index === text.length - 1){
                 clearInterval(intervalId)
-                speak(text)
             }
         }, 50)
     }

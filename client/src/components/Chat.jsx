@@ -34,6 +34,7 @@ const Chat = () => {
   };
 
   const startRecording = async () => {
+    setErrorInRecording(false)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
@@ -73,7 +74,7 @@ const Chat = () => {
   };
 
   useEffect(() => {
-    newSocket.current = io('http://localhost:5000');
+    newSocket.current = io('https://mobishaala-chatbot.onrender.com');
 
     newSocket.current.on('chatReceiveMessage', (data) => {
       if (data.response) {

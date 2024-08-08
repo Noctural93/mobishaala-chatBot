@@ -1,42 +1,81 @@
 import { HfInference } from '@huggingface/inference';
 import dotenv from 'dotenv';
-import express from 'express';
+import express, { response } from 'express';
 import cors from 'cors'
 import http from 'http'
 import { Server } from 'socket.io'
-import { error } from 'console';
+import OpenAI from 'openai';
 
 dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-const hfApiToken = process.env.API_TOKEN;
-const model = 'HuggingFaceH4/zephyr-7b-beta';
+const hfApiToken = process.env.HUGG_API_TOKEN;
+const nvidiaApiToken = process.env.NVIDIA_OPEN_AI;
+// const model = 'HuggingFaceH4/zephyr-7b-beta';
 
-const inference = new HfInference(hfApiToken);
+const openai = new OpenAI({
+    apiKey: nvidiaApiToken,
+    baseURL: 'https://integrate.api.nvidia.com/v1',
+})
 
 app.use(express.json());
 app.use(cors())
 
-async function queryHuggingFaceAPI(userMessage) {
-    try {
+async function nvidia_meta(prompt) {
+    try{
         let responseText = '';
-
-        // Use a for-await-of loop to handle the streaming response
-        for await (const chunk of inference.chatCompletionStream({
-            model: model,
-            messages: [{ role: 'user', content: userMessage }],
-            max_tokens: 500,
-        })) {
-            // Append the chunk's content to the response text
-            responseText += chunk.choices[0]?.delta?.content || '';
+        const completion = await openai.chat.completions.create({
+          model: "meta/llama-3.1-8b-instruct",
+          messages: [{"role":"user","content": prompt}],
+          temperature: 0.2,
+          top_p: 0.7,
+          max_tokens: 1024,
+          stream: true
+        })
+    
+        for await (const chunk of completion) {
+          responseText += chunk.choices[0]?.delta?.content || '';
         }
 
-        return responseText;
-    } catch (error) {
-        console.error('Error querying the API:', error);
+        return responseText
+    } catch(err){
+        console.error('Error in querying the api: ', err)
         return null;
     }
+}
+
+async function speechToTextConverter(buffer) {
+    // const data = fs.readFileSync(filePath);
+    // console.log(data)
+    try {
+        const response = await fetch("https://api-inference.huggingface.co/models/openai/whisper-medium.en", {
+            headers: { Authorization: `Bearer ${hfApiToken}` },
+            method: "POST",
+            body: buffer
+        });
+        const result = await response.json();
+        return result.text;
+    } catch (error) {
+        console.error("Error in speech-to-text conversion:", error);
+        throw error;
+    }
+}
+
+async function textToSpeech(data) {
+    const response = await fetch(
+        "https://api-inference.huggingface.co/models/microsoft/speecht5_tts",
+        {
+            headers: {
+                Authorization: `Bearer ${hfApiToken}`,
+                "Content-Type": "application/json",
+            },
+            method: "POST",
+            body: JSON.stringify(data),
+        }
+    );
+    const result = await response.blob();
+    return result;
 }
 
 const server = http.createServer(app);
@@ -59,11 +98,11 @@ io.on('connection', (socket) => {
         }
 
         try {
-            const streamingResponse = await queryHuggingFaceAPI(msg);
+            const streamingResponse = await nvidia_meta(msg);
             socket.emit('chatReceiveMessage', { response: streamingResponse })
         } catch(err) {
             console.error('Error: ', err);
-            socket.emit('chatError', {error: 'An error occurred.'})
+            socket.emit('chatError', {error: 'An error occurred in generating text in chatbot'})
         }
     });
 
@@ -77,11 +116,53 @@ io.on('connection', (socket) => {
         }
 
         try{
-            const streamingResponse = await queryHuggingFaceAPI(voice);
-            socket.emit('voiceReceiveMessage', { response: streamingResponse })
+            const streamingResponse = await nvidia_meta(voice);
+            if(streamingResponse !== undefined){
+                socket.emit('voiceReceiveMessage', { response: streamingResponse })
+            } else {
+                socket.emit('voiceReceiveMessage', { response : undefined })
+            }
         } catch(err) {
             console.log('Error :', err);
-            socket.emit('voiceError', {error: 'An error occurred'})
+            socket.emit('voiceError', {error: 'An error occurred in text Generation in voice bot'})
+        }
+    });
+
+    socket.on('speechToTextMsgSend', async(data) => {
+        const {voiceRecord} = data;
+        console.log(voiceRecord)
+
+        if(!voiceRecord){
+            socket.emit('speechToTextError', { Error: 'record the voice' });
+            return;
+        }
+
+        try{
+            const buffer = Buffer.from(voiceRecord);
+            const response = await speechToTextConverter(buffer)
+            console.log(response)
+            socket.emit('speechToTextMsgReceived', { response : response })
+        } catch(err) {
+            console.log('Error :', err);
+            socket.emit('speechToTextError', {error: 'An error occurred in speech to text'})
+        }
+    })
+
+    socket.on('textToSpeechSend', async(data) => {
+        const {convert} = data;
+
+        if(!convert){
+            socket.emit('speechToTextError', { Error: 'Error in converting the text to speech' });
+            return;
+        }
+
+        try {
+            const response = await textToSpeech(convert);
+            console.log(response)
+            socket.emit('textToSpeechReceived', { response : response })
+        } catch(err) {
+            console.log('Error :', err);
+            socket.emit('speechToTextError', {error: 'An error occurred in text to speech'})
         }
     })
 
@@ -90,18 +171,40 @@ io.on('connection', (socket) => {
     })
 })
 
-// app.post('/chat', async(req, res) => {
-//     const {msg} = req.body;
-
-//     try{
-//         const streamingResponse = await queryHuggingFaceAPI(msg)
-//         res.json({ response: streamingResponse})
-//     } catch(err) {
-//         console.log('Error: ', err);
-//         res.status(500).json({err: 'An Error occured..'});
-//     }
-// })
-
 server.listen(port, ()=>{
     console.log(`Server is listening at ${port}`)
 })
+
+
+// code for creating a file and storing it with in the code folders
+
+// import fs from 'fs';
+// import path from 'path';
+// import multer from 'multer';
+
+// const upload = multer({ dest : 'uploads/' })
+// const __dirname = path.resolve()
+
+// const filePath = path.join(__dirname, 'uploads', `audio_${Date.now()}.wav`);
+//         console.log(filePath)
+
+//         fs.writeFile(filePath, buffer, async (err) => {
+//             if (err) {
+//               console.error('Error saving file:', err);
+//               socket.emit('speechToTextError', 'Error saving file');
+//               return;
+//             }
+      
+//             try {
+//                 const speechToTextResponse = await speechToTextConverter(filePath);
+//                 console.log(speechToTextResponse);
+//                 socket.emit('speechToTextMsgReceived', { response: speechToTextResponse });
+//               } catch (err) {
+//                 console.log('Error:', err);
+//                 socket.emit('speechToTextError', { Error: 'An error occurred in speech-to-text conversion' });
+//               } finally {
+//                 fs.unlink(filePath, (err) => {
+//                   if (err) console.error('Error deleting file:', err);
+//                 });
+//               }
+//         });

@@ -5,13 +5,18 @@ import cors from 'cors'
 import http from 'http'
 import { Server } from 'socket.io'
 import OpenAI from 'openai';
+import { createClient } from '@deepgram/sdk';
+import fs from 'fs'
+import path from 'path'
 
 dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
+const __dirname = path.resolve()
 
 const hfApiToken = process.env.HUGG_API_TOKEN;
 const nvidiaApiToken = process.env.NVIDIA_OPEN_AI;
+const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 // const model = 'HuggingFaceH4/zephyr-7b-beta';
 
 const openai = new OpenAI({
@@ -21,10 +26,13 @@ const openai = new OpenAI({
 
 app.use(express.json());
 app.use(cors())
+app.use(express.static(path.join(__dirname, 'public')));
 
 async function nvidia_meta(prompt) {
     try{
         let responseText = '';
+        let characterCount = 0;
+
         const completion = await openai.chat.completions.create({
           model: "meta/llama-3.1-8b-instruct",
           messages: [{"role":"user","content": prompt}],
@@ -62,20 +70,27 @@ async function speechToTextConverter(buffer) {
     }
 }
 
-async function textToSpeech(data) {
-    const response = await fetch(
-        "https://api-inference.huggingface.co/models/microsoft/speecht5_tts",
-        {
-            headers: {
-                Authorization: `Bearer ${hfApiToken}`,
-                "Content-Type": "application/json",
-            },
-            method: "POST",
-            body: JSON.stringify(data),
+function splitTextIntoChunks(text, maxChunkSize) {
+    const chunks = [];
+    let currentChunk = '';
+
+    text.split(/\s+/).forEach(word => {
+        // Check if adding the next word would exceed the chunk size
+        if ((currentChunk + word).length > maxChunkSize) {
+            chunks.push(currentChunk.trim()); // Add the current chunk to the list
+            currentChunk = ''; // Reset the current chunk
         }
-    );
-    const result = await response.blob();
-    return result;
+
+        // Add the word to the current chunk
+        currentChunk += word + ' ';
+    });
+
+    // Add the last chunk if it's not empty
+    if (currentChunk.trim().length > 0) {
+        chunks.push(currentChunk.trim());
+    }
+
+    return chunks;
 }
 
 const server = http.createServer(app);
@@ -122,6 +137,75 @@ io.on('connection', (socket) => {
             } else {
                 socket.emit('voiceReceiveMessage', { response : undefined })
             }
+
+            const chunks = splitTextIntoChunks(streamingResponse, 500);
+
+            for (const chunk of chunks) {
+                console.log(chunk)
+                try {
+                    const response = await deepgram.speak.request(
+                        { text : chunk },
+                        {
+                          model: "aura-helios-en",
+                          encoding: "linear16",
+                          container: "wav",
+                          stream: true,
+                        }
+                    );
+                    const stream = await response.getStream();
+                    if (stream) {
+                        const reader = stream.getReader();
+    
+                        let done = false;
+                        let totalData = new Uint8Array();
+    
+                        while (!done) {
+                          const { value, done: streamDone } = await reader.read();
+                          done = streamDone;
+    
+                          if (value) {
+                            // socket.emit('textToSpeechReceived', { response : value });
+    
+                            totalData = new Uint8Array([...totalData, ...value]);
+                          }
+                        }
+
+                        console.log(totalData.buffer)
+                        
+                        socket.emit('textToSpeechReceived', { buffer: Buffer.from(totalData.buffer) });
+    
+                        // await fs.writeFile("output.wav", Buffer.from(totalData.buffer), (err) => {
+                        //     if (err) {
+                        //       console.error("Error writing audio to file:", err);
+                        //     } else {
+                        //       console.log("Audio file written to output.wav");
+                        //     }
+    
+                        //     fs.readFile('output.wav', (err, data) => {
+                        //         if (err) {
+                        //           socket.emit('speechToTextError', { error: 'File read error' });
+                        //         } else {
+                        //           socket.emit('textToSpeechReceived', { buffer: data });
+                        //         }
+                        //     });
+                        // });
+
+                        // await new Promise(resolve => {
+                        //     socket.once('audioPlaybackFinished', resolve);
+                        // });
+    
+                    } else {
+                        socket.emit('speechToTextError', { error: 'Failed to create audio stream.' });
+                    }
+    
+                    // app.get('/output.wav', (req, res) => {
+                    //     res.sendFile(path.join(__dirname, 'output.wav'));
+                    // });
+                } catch(err) {
+                    console.log('Error :', err);
+                    socket.emit('speechToTextError', {error: 'An error occurred in text to speech'})
+                }
+            }
         } catch(err) {
             console.log('Error :', err);
             socket.emit('voiceError', {error: 'An error occurred in text Generation in voice bot'})
@@ -130,7 +214,6 @@ io.on('connection', (socket) => {
 
     socket.on('speechToTextMsgSend', async(data) => {
         const {voiceRecord} = data;
-        console.log(voiceRecord)
 
         if(!voiceRecord){
             socket.emit('speechToTextError', { Error: 'record the voice' });
@@ -140,7 +223,6 @@ io.on('connection', (socket) => {
         try{
             const buffer = Buffer.from(voiceRecord);
             const response = await speechToTextConverter(buffer)
-            console.log(response)
             socket.emit('speechToTextMsgReceived', { response : response })
         } catch(err) {
             console.log('Error :', err);
@@ -148,23 +230,75 @@ io.on('connection', (socket) => {
         }
     })
 
-    socket.on('textToSpeechSend', async(data) => {
-        const {convert} = data;
+    // socket.on('textToSpeechSend', async(data) => {
+    //     const {text} = data;
+    //     console.log(text)
 
-        if(!convert){
-            socket.emit('speechToTextError', { Error: 'Error in converting the text to speech' });
-            return;
-        }
+    //     if(!text){
+    //         socket.emit('speechToTextError', { Error: 'Error in converting the text to speech' });
+    //         return;
+    //     }
 
-        try {
-            const response = await textToSpeech(convert);
-            console.log(response)
-            socket.emit('textToSpeechReceived', { response : response })
-        } catch(err) {
-            console.log('Error :', err);
-            socket.emit('speechToTextError', {error: 'An error occurred in text to speech'})
-        }
-    })
+    //     const chunks = splitTextIntoChunks(text, 1000);
+
+    //     for (const chunk of chunks) {
+    //         try {
+    //             const response = await deepgram.speak.request(
+    //                 { text : chunk },
+    //                 {
+    //                   model: "aura-helios-en",
+    //                   encoding: "linear16",
+    //                   container: "wav",
+    //                   stream: true,
+    //                 }
+    //             );
+    //             const stream = await response.getStream();
+    //             if (stream) {
+    //                 const reader = stream.getReader();
+
+    //                 let done = false;
+    //                 let totalData = new Uint8Array();
+
+    //                 while (!done) {
+    //                   const { value, done: streamDone } = await reader.read();
+    //                   done = streamDone;
+
+    //                   if (value) {
+    //                     // socket.emit('textToSpeechReceived', { response : value });
+
+    //                     totalData = new Uint8Array([...totalData, ...value]);
+    //                   }
+    //                 }
+
+    //                 await fs.writeFile("output.wav", Buffer.from(totalData.buffer), (err) => {
+    //                     if (err) {
+    //                       console.error("Error writing audio to file:", err);
+    //                     } else {
+    //                       console.log("Audio file written to output.wav");
+    //                     }
+
+    //                     fs.readFile('output.wav', (err, data) => {
+    //                         if (err) {
+    //                           socket.emit('speechToTextError', { error: 'File read error' });
+    //                         } else {
+    //                           socket.emit('textToSpeechReceived', { buffer: data });
+    //                         }
+    //                     });
+    //                 });
+
+    //             } else {
+    //                 socket.emit('speechToTextError', { error: 'Failed to create audio stream.' });
+    //             }
+
+    //             // app.get('/output.wav', (req, res) => {
+    //             //     res.sendFile(path.join(__dirname, 'output.wav'));
+    //             // });
+    //         } catch(err) {
+    //             console.log('Error :', err);
+    //             socket.emit('speechToTextError', {error: 'An error occurred in text to speech'})
+    //         }
+    //     }
+    // })
 
     socket.on('disconnect', () => {
         console.log('A user disconnected');
@@ -174,6 +308,9 @@ io.on('connection', (socket) => {
 server.listen(port, ()=>{
     console.log(`Server is listening at ${port}`)
 })
+
+
+
 
 
 // code for creating a file and storing it with in the code folders
